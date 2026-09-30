@@ -1,0 +1,103 @@
+name: Rust CI Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE_NAME: my-rust-app
+
+jobs:
+  # Job 1: Линтинг и форматирование
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: rustfmt, clippy
+          override: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy (linter)
+        run: cargo clippy -- -D warnings
+
+  # Job 2: Сборка и тестирование
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      # Быстрая проверка типов (экономит время при ошибках)
+      - name: Check code (fast)
+        run: cargo check --verbose
+
+      # Проверка debug-сборки
+      - name: Check debug build
+        run: cargo build --verbose
+
+      # Проверка release-сборки (важно для production)
+      - name: Check release build
+        run: cargo build --release --verbose
+
+      # Запуск тестов
+      - name: Run tests
+        run: cargo test --verbose
+
+  # Job 3: Сборка Docker образа
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save Docker image as artifact
+        run: |
+          docker save ${{ env.IMAGE_NAME }}:latest -o /tmp/docker-image.tar
+          gzip /tmp/docker-image.tar
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/docker-image.tar.gz
+          retention-days: 7
+
+      - name: Test Docker image
+        run: docker run --rm ${{ env.IMAGE_NAME }}:latest
